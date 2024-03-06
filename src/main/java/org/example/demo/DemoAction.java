@@ -78,6 +78,7 @@ public class DemoAction extends AnAction {
             // 获取字段名
             String fieldName = field.getName();
             if (wordStr.length() > 0) {
+                // 加一个隔离符区分开，方便百度翻译一次性查询 PS：通用翻译接口需要间隔一段时间才能继续请求，否则会报错
                 wordStr.append(separator).append(replaceLower(fieldName));
             } else {
                 wordStr.append(replaceLower(fieldName));
@@ -90,7 +91,7 @@ public class DemoAction extends AnAction {
             if (translateWords == null) {
                 throw new RuntimeException("翻译失败");
             }
-            System.out.println(translateWords);
+            // 把之前的隔离符还原
             wordList = translateWords.split(separator);
         }
         // 使用 WriteCommandAction 保存更改
@@ -101,7 +102,6 @@ public class DemoAction extends AnAction {
             int wordI = 0;
             for (int i = 0; i < fields.length; i++) {
                 PsiField field = fields[i];
-                System.out.println(field);
                 // 检查是否为 final 和 static，是则跳过
                 boolean isFinal = field.hasModifierProperty(PsiModifier.FINAL);
                 boolean isStatic = field.hasModifierProperty(PsiModifier.STATIC);
@@ -110,25 +110,22 @@ public class DemoAction extends AnAction {
                 }
                 // 创建注解
                 String annotationText = String.format("@Demo(value = \"" + field.getName() + "\", description =\"%s\")", finalWordList[wordI]);
-                System.out.println(annotationText);
                 PsiAnnotation annotation = factory.createAnnotationFromText(annotationText, psiClass);
                 wordI++;
                 if (isSerialVersionUID(field.getContext())) {
                     continue;
                 }
-                // 获取属性声明的 PsiElement
-                PsiElement fieldDeclaration = field.getPrevSibling();
-                System.out.println(fieldDeclaration);
+                // 获取属性声明的可能存在的firstChild PS：属性字段上面有可能会存在注释说明，所以需要特殊处理
                 PsiElement firstChild = field.getFirstChild();
-
                 try {
+                    // 如果是注释说明
                     if (firstChild instanceof PsiDocComment) {
+                        // 获取定位：注释说明的起始位置 + 注释说明的长度
                         int childTextOffset = firstChild.getTextOffset();
-                        System.out.println(childTextOffset);
                         int childTextLength = firstChild.getTextLength();
-                        System.out.println(childTextLength);
                         // 如果字段上面有注释，则特殊处理，直接用Document插入注解
                         document.insertString(childTextOffset + childTextLength, "\n\t" + annotationText);
+                        // 提交文档，并解锁（解锁后，其他线程才能修改）
                         documentManager.commitDocument(document);
                         documentManager.doPostponedOperationsAndUnblockDocument(document);
                     } else {
@@ -138,25 +135,26 @@ public class DemoAction extends AnAction {
                     System.out.println(e.getMessage());
                 }
             }
-            // 添加导入语句
+            // 获取当前全部的导入语句
             PsiImportList importList = psiJavaFile.getImportList();
+            // 添加导入语句，这个createImportStatementOnDemand其实有个问题，会把包名自动加上.*，不过这就是个例子，为了方便引出后面的使用，就先这么写了
             if (importList != null && importList.findOnDemandImportStatement(annotate) == null) {
                 importList.add(factory.createImportStatementOnDemand(annotate));
             }
         });
+        // 处理导入注释import结尾会自动附带.*的问题
         WriteCommandAction.runWriteCommandAction(project, () -> {
             PsiDocumentManager documentManager = PsiDocumentManager.getInstance(project);
             Document document = documentManager.getDocument(psiJavaFile);
             PsiImportList psiImportList = psiJavaFile.getImportList();
+            // 返回列表中包含的非静态 import 语句
             PsiImportStatement[] importStatements = psiImportList.getImportStatements();
             for (PsiImportStatement importStatement : importStatements) {
-                int textOffset = importStatement.getTextOffset();
-                System.out.println(textOffset);
-                System.out.println(importStatement.getText());
                 if (importStatement.getText().contains(annotate + ".*")) {
-                    System.out.println(document.getText());
+                    // 获取当前java文件转化的文本内容
                     String text = document.getText();
                     String all = text.replaceAll(annotate + "\\.\\*", annotate);
+                    // 直接对文本进行替换，然后提交文档，即可修改当前java文件
                     document.setText(all);
                     documentManager.commitDocument(document);
                     documentManager.doPostponedOperationsAndUnblockDocument(document);
